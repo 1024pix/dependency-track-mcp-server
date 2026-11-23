@@ -187,6 +187,8 @@ function ensureInteger(value, name, { min = Number.MIN_SAFE_INTEGER, max = Numbe
   return value;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function readBomAsBase64(bomPath) {
   const resolved = path.resolve(bomPath);
   const bytes = fs.readFileSync(resolved);
@@ -303,6 +305,30 @@ const tools = [
         projectTags: { type: "array", items: { type: "string" }, description: "Optional project tags." },
         bomPath: { type: "string", description: "Path to a BOM file on disk." },
         bomBase64: { type: "string", description: "Base64-encoded BOM content." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "lookup_component",
+    description:
+      "Search components across the portfolio by identity: coordinates (group, name, version) or purl, cpe, swidTagId. At least one identity field is required. Server-side paging.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        group: { type: "string", description: "Component group (e.g. Maven groupId, npm scope)." },
+        name: { type: "string", description: "Component name." },
+        version: { type: "string", description: "Component version." },
+        purl: { type: "string", description: "Package URL, e.g. pkg:npm/lodash@4.17.21." },
+        cpe: { type: "string", description: "CPE 2.2 or 2.3 string." },
+        swidTagId: { type: "string", description: "SWID tag ID." },
+        project: { type: "string", description: "Restrict to components of this project UUID." },
+        excludeInactiveProjects: { type: "boolean", description: "Only return components from active projects." },
+        onlyLatestProjectVersions: { type: "boolean", description: "Only return components from projects flagged as latest version." },
+        pageNumber: { type: "integer", minimum: 1, description: "Page to return (1-based). Defaults to 1." },
+        pageSize: { type: "integer", minimum: 1, maximum: 500, description: "Components per page. Defaults to 25." },
+        sortName: { type: "string", description: "Component field to sort on." },
+        sortOrder: { type: "string", enum: ["asc", "desc"], description: "Sort order, used with sortName." }
       },
       additionalProperties: false
     }
@@ -490,6 +516,71 @@ async function callTool(name, args) {
           json: payload
         })
       ).body;
+    }
+
+    case "lookup_component": {
+      const identityFields = ["group", "name", "version", "purl", "cpe", "swidTagId"];
+      const identity = {};
+      for (const field of identityFields) {
+        if (args[field] !== undefined) {
+          identity[field] = ensureString(args[field], field);
+        }
+      }
+      if (Object.keys(identity).length === 0) {
+        throw new Error(`lookup_component requires at least one of: ${identityFields.join(", ")}.`);
+      }
+
+      let project;
+      if (args.project !== undefined) {
+        project = ensureString(args.project, "project");
+        if (!UUID_PATTERN.test(project)) {
+          throw new Error("project must be a UUID.");
+        }
+      }
+
+      const pageNumber = args.pageNumber === undefined ? 1 : ensureInteger(args.pageNumber, "pageNumber", { min: 1 });
+      const pageSize = args.pageSize === undefined ? 25 : ensureInteger(args.pageSize, "pageSize", { min: 1, max: 500 });
+
+      let sortName;
+      let sortOrder;
+      if (args.sortName !== undefined) {
+        sortName = ensureString(args.sortName, "sortName");
+      }
+      if (args.sortOrder !== undefined) {
+        sortOrder = ensureString(args.sortOrder, "sortOrder");
+        if (sortOrder !== "asc" && sortOrder !== "desc") {
+          throw new Error('sortOrder must be "asc" or "desc".');
+        }
+      }
+
+      const response = await dependencyTrackRequest({
+        endpoint: "/v1/component/identity",
+        query: {
+          ...identity,
+          project,
+          excludeInactiveProjects:
+            args.excludeInactiveProjects === undefined
+              ? undefined
+              : ensureBoolean(args.excludeInactiveProjects, "excludeInactiveProjects"),
+          onlyLatestProjectVersions:
+            args.onlyLatestProjectVersions === undefined
+              ? undefined
+              : ensureBoolean(args.onlyLatestProjectVersions, "onlyLatestProjectVersions"),
+          pageNumber,
+          pageSize,
+          sortName,
+          sortOrder
+        }
+      });
+
+      const components = Array.isArray(response.body) ? response.body : [];
+      return {
+        pageNumber,
+        pageSize,
+        totalCount: Number(response.headers["x-total-count"] || response.headers["total-count"] || 0),
+        returnedCount: components.length,
+        components
+      };
     }
 
     case "get_event_token_status": {

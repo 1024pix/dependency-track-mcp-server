@@ -12,6 +12,7 @@ The implementation is based on the official Dependency-Track API surface:
 - `POST /api/v1/finding/project/{uuid}/analyze`
 - `PUT /api/v1/bom`
 - `GET /api/v1/event/token/{uuid}`
+- `GET /api/v1/component/identity`
 
 Official references:
 
@@ -32,6 +33,7 @@ Official references:
 - `trigger_project_analysis`
 - `upload_bom`
 - `get_event_token_status`
+- `lookup_component`
 
 ## Requirements
 
@@ -61,6 +63,11 @@ $env:DEPENDENCY_TRACK_BEARER_TOKEN="your-bearer-token"
 node src/index.js
 ```
 
+Inside a docker container : 
+```powershell
+docker build -t dependency-track-mcp-server:0.2.0 .
+```
+
 ## Codex MCP configuration
 
 Example stdio entry:
@@ -84,7 +91,7 @@ Example stdio entry:
 
 ## OpenCode configuration
 
-opencode.jsonc
+opencode.jsonc :
 
 ```json
 {
@@ -102,14 +109,22 @@ opencode.jsonc
 }
 ```
 
+> The variables here are passed to the docker so they should be exported in the opencode shell.
+
 ## Notes on permissions
 
 The server only wraps official Dependency-Track endpoints. Actual access still depends on the permissions of the API key or bearer token:
 
 - project listing and lookup: `VIEW_PORTFOLIO`
+- component lookup: `VIEW_PORTFOLIO`
 - findings and analysis: `VIEW_VULNERABILITY`
 - BOM upload: `BOM_UPLOAD`
 - auto-create during BOM upload: `PORTFOLIO_MANAGEMENT` or `PROJECT_CREATION_UPLOAD`
+
+> Security Notice : 
+>
+> * VIEW_PORTFOLIO and VIEW_VULNERABILITY are enough for read-only use.
+> * upload_bom and trigger_project_analysis change data on the server. An agent following injected instructions could call them, so leave them out of the key's permissions unless you need them.
 
 ## Query behavior
 
