@@ -57,6 +57,20 @@ $env:DEPENDENCY_TRACK_BASE_URL="https://dependency-track.example.com"
 $env:DEPENDENCY_TRACK_BEARER_TOKEN="your-bearer-token"
 ```
 
+### Basic Auth (reverse proxy)
+
+If your instance sits behind a proxy protected with HTTP Basic Auth, also set both variables below. Every API call then sends an `Authorization: Basic ...` header along with the `X-Api-Key` header:
+
+```powershell
+$env:DEPENDENCY_TRACK_BASIC_USERNAME="proxy-user"
+$env:DEPENDENCY_TRACK_BASIC_PASSWORD="proxy-password"
+```
+
+- Both variables must be set together; setting only one is an error.
+- Basic Auth cannot be combined with `DEPENDENCY_TRACK_BEARER_TOKEN` (both use the `Authorization` header). Use `DEPENDENCY_TRACK_API_KEY` instead.
+- The username must not contain `:` ([RFC 7617](https://datatracker.ietf.org/doc/html/rfc7617)).
+- Basic Auth credentials are only base64-encoded: always use an `https://` base URL.
+
 ## Run
 
 ```powershell
@@ -102,6 +116,7 @@ opencode.jsonc :
       "command": ["docker", "run", "-i", "--rm", "--read-only", "--cap-drop=ALL",
                   "--security-opt=no-new-privileges",
                   "-e", "DEPENDENCY_TRACK_BASE_URL", "-e", "DEPENDENCY_TRACK_API_KEY",
+                  "-e", "DEPENDENCY_TRACK_BASIC_USERNAME", "-e", "DEPENDENCY_TRACK_BASIC_PASSWORD",
                   "dependency-track-mcp-server:0.2.0"],
       "enabled": true
     }

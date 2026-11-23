@@ -87,12 +87,43 @@ function buildApiUrl(baseUrl, endpoint, query) {
   return url;
 }
 
+// Optional HTTP Basic Auth (RFC 7617), e.g. for a reverse proxy in front of Dependency-Track.
+// Returns null when neither variable is set.
+function getBasicAuthHeader() {
+  const username = process.env.DEPENDENCY_TRACK_BASIC_USERNAME;
+  const password = process.env.DEPENDENCY_TRACK_BASIC_PASSWORD;
+
+  if (!username && !password) {
+    return null;
+  }
+
+  if (!username || !password) {
+    throw new Error(
+      "DEPENDENCY_TRACK_BASIC_USERNAME and DEPENDENCY_TRACK_BASIC_PASSWORD must both be set to use Basic Auth."
+    );
+  }
+
+  if (username.includes(":")) {
+    throw new Error("DEPENDENCY_TRACK_BASIC_USERNAME must not contain ':'.");
+  }
+
+  return `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
+}
+
 function getAuthHeaders() {
   const apiKey = process.env.DEPENDENCY_TRACK_API_KEY;
   const bearerToken = process.env.DEPENDENCY_TRACK_BEARER_TOKEN;
 
   if (!apiKey && !bearerToken) {
     throw new Error("Missing DEPENDENCY_TRACK_API_KEY or DEPENDENCY_TRACK_BEARER_TOKEN.");
+  }
+
+  const basicAuth = getBasicAuthHeader();
+
+  if (basicAuth && bearerToken) {
+    throw new Error(
+      "Basic Auth and DEPENDENCY_TRACK_BEARER_TOKEN both use the Authorization header; use DEPENDENCY_TRACK_API_KEY with Basic Auth."
+    );
   }
 
   const headers = {
@@ -106,6 +137,10 @@ function getAuthHeaders() {
 
   if (bearerToken) {
     headers.Authorization = `Bearer ${bearerToken}`;
+  }
+
+  if (basicAuth) {
+    headers.Authorization = basicAuth;
   }
 
   return headers;
