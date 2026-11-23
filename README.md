@@ -82,6 +82,26 @@ Example stdio entry:
 }
 ```
 
+## OpenCode configuration
+
+opencode.jsonc
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "dependency-track": {
+      "type": "local",
+      "command": ["docker", "run", "-i", "--rm", "--read-only", "--cap-drop=ALL",
+                  "--security-opt=no-new-privileges",
+                  "-e", "DEPENDENCY_TRACK_BASE_URL", "-e", "DEPENDENCY_TRACK_API_KEY",
+                  "dependency-track-mcp-server:0.2.0"],
+      "enabled": true
+    }
+  }
+}
+```
+
 ## Notes on permissions
 
 The server only wraps official Dependency-Track endpoints. Actual access still depends on the permissions of the API key or bearer token:

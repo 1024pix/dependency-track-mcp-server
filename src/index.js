@@ -4,52 +4,57 @@ const fs = require("fs");
 const path = require("path");
 const process = require("process");
 
+// MCP stdio transport: newline-delimited JSON-RPC messages.
+// JSON.stringify never emits raw newlines, so each message stays on one line.
 function serializeMessage(message) {
-  const payload = JSON.stringify(message);
-  return `Content-Length: ${Buffer.byteLength(payload, "utf8")}\r\n\r\n${payload}`;
+  return `${JSON.stringify(message)}\n`;
 }
 
-class HeaderFramedReader {
-  constructor(onMessage, onError) {
+// Upper bound for a single pending line, to avoid unbounded memory growth.
+// Large enough for base64-encoded BOMs sent through upload_bom.
+const MAX_LINE_CHARS = 64 * 1024 * 1024;
+
+class LineDelimitedReader {
+  constructor(onMessage, onParseError, onOverflow) {
     this.onMessage = onMessage;
-    this.onError = onError;
-    this.buffer = Buffer.alloc(0);
+    this.onParseError = onParseError;
+    this.onOverflow = onOverflow;
+    this.buffer = "";
   }
 
   append(chunk) {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    this.process();
+    if (chunk.indexOf("\n") === -1) {
+      this.buffer += chunk;
+      this.checkOverflow();
+      return;
+    }
+
+    const lines = (this.buffer + chunk).split("\n");
+    this.buffer = lines.pop();
+
+    for (const rawLine of lines) {
+      const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+      if (!line.trim()) {
+        continue;
+      }
+
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch (error) {
+        this.onParseError(error);
+        continue;
+      }
+      this.onMessage(message);
+    }
+
+    this.checkOverflow();
   }
 
-  process() {
-    while (true) {
-      const headerEnd = this.buffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) {
-        return;
-      }
-
-      const headerText = this.buffer.subarray(0, headerEnd).toString("utf8");
-      const match = headerText.match(/Content-Length:\s*(\d+)/i);
-      if (!match) {
-        this.onError(new Error(`Missing Content-Length header: ${headerText}`));
-        return;
-      }
-
-      const contentLength = Number(match[1]);
-      const totalLength = headerEnd + 4 + contentLength;
-      if (this.buffer.length < totalLength) {
-        return;
-      }
-
-      const body = this.buffer.subarray(headerEnd + 4, totalLength).toString("utf8");
-      this.buffer = this.buffer.subarray(totalLength);
-
-      try {
-        this.onMessage(JSON.parse(body));
-      } catch (error) {
-        this.onError(error);
-        return;
-      }
+  checkOverflow() {
+    if (this.buffer.length > MAX_LINE_CHARS) {
+      this.buffer = "";
+      this.onOverflow();
     }
   }
 }
@@ -558,6 +563,12 @@ async function handleMessage(message) {
     return;
   }
 
+  // Notifications (no id, e.g. notifications/initialized, notifications/cancelled)
+  // must never receive a response.
+  if (!Array.isArray(message) && !Object.prototype.hasOwnProperty.call(message, "id")) {
+    return;
+  }
+
   if (message.jsonrpc !== "2.0") {
     process.stdout.write(serializeMessage(errorResponse(message.id ?? null, -32600, "Invalid JSON-RPC version.")));
     return;
@@ -581,10 +592,6 @@ async function handleMessage(message) {
           })
         )
       );
-      return;
-    }
-
-    if (method === "notifications/initialized") {
       return;
     }
 
@@ -623,11 +630,21 @@ async function handleMessage(message) {
   }
 }
 
-const reader = new HeaderFramedReader(handleMessage, (error) => {
-  logError(error);
-  process.exit(1);
-});
+const reader = new LineDelimitedReader(
+  (message) => {
+    handleMessage(message).catch(logError);
+  },
+  (error) => {
+    logError(error);
+    process.stdout.write(serializeMessage(errorResponse(null, -32700, "Parse error")));
+  },
+  () => {
+    logError(new Error(`Incoming message exceeded ${MAX_LINE_CHARS} characters; discarded.`));
+  }
+);
 
+// utf8 decoding on the stream handles multi-byte characters split across chunks.
+process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => reader.append(chunk));
 process.stdin.on("error", (error) => {
   logError(error);
